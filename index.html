@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gaze Sound on Eye Movement with Jitter Reduction</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background-color: #4CAF50;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 3em;
+      color: white;
+      user-select: none;
+    }
+    #startBtn {
+      padding: 1em 2em;
+      font-size: 1.2em;
+      background: #333;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+      margin-bottom: 1rem;
+    }
+    #status {
+      font-size: 1em;
+      margin-top: 10px;
+      white-space: pre-wrap;
+      max-width: 90vw;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <button id="startBtn">Start Tracking</button>
+  <audio id="noise" src="sound1.mp3" preload="auto"></audio>
+  <div id="status"></div>
+
+  <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+  <script>
+    const MOVEMENT_THRESHOLD = 180; // Minimum distance to trigger sound (px)
+    const JITTER_THRESHOLD = 180;    // Movements under this are ignored (px)
+    const NO_MOVEMENT_TIMEOUT = 300;  // Time in ms before stopping sound after no movement
+
+    document.getElementById('startBtn').onclick = async () => {
+      const startBtn = document.getElementById('startBtn');
+      const audio = document.getElementById('noise');
+      const statusEl = document.getElementById('status');
+
+      startBtn.style.display = "none";
+
+      // Unlock audio playback with user gesture
+      try {
+        await audio.play();
+        audio.pause();
+        audio.currentTime = 0;
+      } catch (e) {
+        console.warn("Audio unlock failed:", e);
+        statusEl.textContent = "Audio unlock failed; please interact with the page.";
+        return;
+      }
+
+      // Configure audio to not loop (play once fully per trigger)
+      audio.loop = false;
+
+      let eyesStableOpen = false;
+      let stableTimer = null;
+      let lastGaze = null;
+      let gazePointsReceived = 0;
+      let soundPlaying = false;
+
+      function updateStatus(text) {
+        statusEl.textContent = text;
+        console.log(text);
+      }
+
+      function playSound() {
+        if (!soundPlaying) {
+          audio.currentTime = 0;
+          audio.play()
+            .then(() => {
+              soundPlaying = true;
+              updateStatus("Sound Playing | Eyes Moving");
+            })
+            .catch((err) => {
+              console.warn("Audio play rejected:", err);
+              updateStatus("Audio play blocked or failed");
+            });
+        }
+      }
+
+      function stopSound() {
+        // Do not pause mid-play; let sound finish naturally
+        if (soundPlaying) {
+          updateStatus("Sound playing to completion (No eye movement detected)");
+          // We'll set soundPlaying = false in `onended`
+        }
+      }
+
+      audio.onended = () => {
+        soundPlaying = false;
+        updateStatus("Sound Ended");
+      };
+
+      await webgazer.setRegression('ridge')
+        .setGazeListener((data, timestamp) => {
+          if (!data) {
+            if (stableTimer) clearTimeout(stableTimer);
+            stableTimer = setTimeout(() => {
+              stopSound();
+              lastGaze = null;
+              gazePointsReceived = 0;
+            }, NO_MOVEMENT_TIMEOUT);
+            return;
+          }
+
+          gazePointsReceived++;
+          if (lastGaze && gazePointsReceived > 1) {
+            const dx = data.x - lastGaze.x;
+            const dy = data.y - lastGaze.y;
+            let dist = Math.sqrt(dx*dx + dy*dy);
+
+            // Clamp jitter: ignore small movements under JITTER_THRESHOLD
+            if (dist < JITTER_THRESHOLD) {
+              dist = 0;
+            }
+
+            updateStatus(`Distance: ${dist.toFixed(2)} px\nSound playing: ${soundPlaying}`);
+
+            if (dist > MOVEMENT_THRESHOLD) {
+              playSound();
+
+              if (stableTimer) clearTimeout(stableTimer);
+              stableTimer = setTimeout(() => {
+                stopSound();
+              }, NO_MOVEMENT_TIMEOUT);
+            }
+          } else {
+            updateStatus("Getting initial gaze fixations...");
+          }
+          lastGaze = data;
+        }).begin();
+
+      webgazer.showPredictionPoints(true);
+    //   webgazer.showVideo(true);
+    };
+  </script>
+</body>
+</html>
